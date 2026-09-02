@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------------------
+# notify-klipper Docker / Podman Compose configuration.
+#
+# Quickstart:
+#   cp .env.example .env     # fill in your Notify! device credentials & Moonraker URL
+#   docker compose up -d
+#   docker compose logs -f
+# ---------------------------------------------------------------------------
+
+services:
+  notify-klipper:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: notify-klipper:0.1.0
+    container_name: notify-klipper
+    restart: on-failure:5
+    stop_grace_period: 15s
+
+    # Configuration can come from .env file or environment block below
+    env_file:
+      - .env
+
+    # Optional explicit environment variable overrides:
+    # environment:
+    #   - MOONRAKER_URL=http://192.168.1.50:7125
+    #   - MOONRAKER_API_KEY=your_optional_moonraker_key
+    #   - NOTIFY_DEVICE_ID=your_notify_device_id
+    #   - NOTIFY_DEVICE_TOKEN=your_notify_device_token
+    #   - PRINTER_NAME=Voron 2.4
+
+    # Security & Hardening:
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    # Resource constraints
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

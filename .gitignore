@@ -1,0 +1,58 @@
+# Compiled Binaries & Build Output
+bin/
+dist/
+/notify-klipper
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go Dependencies
+# Dependencies are declared in go.mod and go.sum.
+vendor/
+
+# Environment Variables & Credentials
+.env
+.env.*
+!.env.example
+*.key
+*.token
+*.pem
+*.crt
+*.p12
+*.pfx
+secrets/
+/secrets/
+
+# Local Config Files
+notify-klipper.yaml
+notify-klipper.yml
+config.yaml
+config.yml
+
+# Logs & Cache
+*.log
+.cache/
+tmp/
+/tmp/
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE & Editor Artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
