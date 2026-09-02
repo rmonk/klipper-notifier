@@ -55,54 +55,77 @@ func TestMoonrakerCheckConnection(t *testing.T) {
 
 func TestMoonrakerQueryStatusWithAFC(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/printer/objects/query" {
+		if r.URL.Path == "/printer/objects/list" {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"result": map[string]interface{}{
-					"status": map[string]interface{}{
-						"print_stats": map[string]interface{}{
-							"filename":       "voron_cube.gcode",
-							"state":          "printing",
-							"print_duration": 120.0,
-							"total_duration": 150.0,
-						},
-						"display_status": map[string]interface{}{
-							"progress": 0.45,
-							"message":  "Printing layer 10",
-						},
-						"heater_bed": map[string]interface{}{
-							"temperature": 60.2,
-							"target":      60.0,
-						},
-						"extruder": map[string]interface{}{
-							"temperature": 210.5,
-							"target":      210.0,
-						},
-						"toolhead": map[string]interface{}{
-							"extruder": "extruder2",
-						},
-						"AFC": map[string]interface{}{
-							"current_lane": "E2",
-							"lanes":        []string{"E0", "E1", "E2", "E3"},
-						},
-						"AFC_lane E0": map[string]interface{}{
-							"name":          "E0",
-							"material":      "PLA",
-							"filament_name": "Generic PLA",
-							"color":         "#000000",
-							"extruder":      "extruder",
-							"status":        "empty",
-						},
-						"AFC_lane E2": map[string]interface{}{
-							"name":          "E2",
-							"material":      "PETG",
-							"filament_name": "Generic PETG",
-							"color":         "#8E24AA",
-							"extruder":      "extruder2",
-							"status":        "Loaded",
-							"tool_loaded":   true,
-						},
-					},
+					"objects": []string{"print_stats", "AFC", "AFC_lane E0", "AFC_lane E2"},
+				},
+			})
+			return
+		}
+		if r.URL.Path == "/printer/objects/query" {
+			requested := r.URL.Query()
+			if !requested.Has("AFC_lane E2") {
+				t.Errorf("expected status query to request active lane AFC_lane E2; query was %q", r.URL.RawQuery)
+			}
+
+			status := map[string]interface{}{
+				"print_stats": map[string]interface{}{
+					"filename":       "voron_cube.gcode",
+					"state":          "printing",
+					"print_duration": 120.0,
+					"total_duration": 150.0,
+				},
+				"display_status": map[string]interface{}{
+					"progress": 0.45,
+					"message":  "Printing layer 10",
+				},
+				"heater_bed": map[string]interface{}{
+					"temperature": 60.2,
+					"target":      60.0,
+				},
+				"extruder": map[string]interface{}{
+					"temperature": 210.5,
+					"target":      210.0,
+				},
+				"toolhead": map[string]interface{}{
+					"extruder": "extruder2",
+				},
+				"AFC": map[string]interface{}{
+					"current_lane": "E2",
+					"lanes":        []string{"E0", "E1", "E2", "E3"},
+				},
+			}
+			lanes := map[string]map[string]interface{}{
+				"AFC_lane E0": {
+					"name":          "E0",
+					"material":      "PLA",
+					"filament_name": "Generic PLA",
+					"color":         "#000000",
+					"extruder":      "extruder",
+					"status":        "empty",
+				},
+				"AFC_lane E2": {
+					"name":          "E2",
+					"material":      "PETG",
+					"filament_name": "Generic PETG",
+					"color":         "#8E24AA",
+					"extruder":      "extruder2",
+					"status":        "Loaded",
+					"tool_loaded":   true,
+				},
+			}
+			for laneName, lane := range lanes {
+				if requested.Has(laneName) {
+					status[laneName] = lane
+				}
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"result": map[string]interface{}{
+					"status": status,
 				},
 			})
 			return

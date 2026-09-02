@@ -21,13 +21,15 @@ type Client struct {
 	apiKey      string
 	httpClient  *http.Client
 
-	mu           sync.Mutex
-	status       MoonrakerStatus
-	metadata     map[string]*GCodeMetadata
-	metaFetching map[string]bool
-	afcLanes     map[string]*AFCLane
-	afcRoot      *AFCObject
-	listeners    []func(MoonrakerStatus)
+	mu            sync.Mutex
+	status        MoonrakerStatus
+	metadata      map[string]*GCodeMetadata
+	metaFetching  map[string]bool
+	afcLanes      map[string]*AFCLane
+	afcLaneNames  map[string]struct{}
+	afcDiscovered bool
+	afcRoot       *AFCObject
+	listeners     []func(MoonrakerStatus)
 }
 
 func NewClient(rawURL, apiKey string) (*Client, error) {
@@ -61,6 +63,7 @@ func NewClient(rawURL, apiKey string) (*Client, error) {
 		metadata:     make(map[string]*GCodeMetadata),
 		metaFetching: make(map[string]bool),
 		afcLanes:     make(map[string]*AFCLane),
+		afcLaneNames: make(map[string]struct{}),
 	}, nil
 }
 
@@ -276,12 +279,26 @@ func (c *Client) ListObjects(ctx context.Context) ([]string, error) {
 func (c *Client) QueryStatus(ctx context.Context) (*MoonrakerStatus, error) {
 	queryObjs := []string{"print_stats", "display_status", "virtual_sdcard", "heater_bed", "extruder", "toolhead", "AFC"}
 
-	// Dynamically include any discovered AFC_lane objects
 	c.mu.Lock()
-	for laneKey := range c.afcLanes {
-		if strings.HasPrefix(laneKey, "AFC_lane") {
-			queryObjs = append(queryObjs, url.QueryEscape(laneKey))
+	discovered := c.afcDiscovered
+	c.mu.Unlock()
+	if !discovered {
+		if objects, err := c.ListObjects(ctx); err == nil {
+			c.mu.Lock()
+			for _, object := range objects {
+				if strings.HasPrefix(object, "AFC_lane") {
+					c.afcLaneNames[object] = struct{}{}
+				}
+			}
+			c.afcDiscovered = true
+			c.mu.Unlock()
 		}
+	}
+
+	// Dynamically include any discovered AFC_lane objects.
+	c.mu.Lock()
+	for laneName := range c.afcLaneNames {
+		queryObjs = append(queryObjs, url.QueryEscape(laneName))
 	}
 	c.mu.Unlock()
 
