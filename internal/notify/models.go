@@ -2,9 +2,12 @@ package notify
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
+
+var hexColorRegex = regexp.MustCompile(`^#?[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
 
 // MetricChip represents a small metric badge shown on iOS Live Activity widget.
 type MetricChip struct {
@@ -38,6 +41,7 @@ type TileContent struct {
 }
 
 // FormatTint normalizes a color name or hex code into a valid #RRGGBB tint hex string for Notify!
+// Returns fallback "#00A76F" (teal) if the color is unparseable.
 func FormatTint(c string) string {
 	c = strings.TrimSpace(c)
 	if c == "" {
@@ -65,10 +69,13 @@ func FormatTint(c string) string {
 	case "gray", "grey":
 		return "#8E8E93"
 	}
-	if !strings.HasPrefix(c, "#") {
-		return "#" + c
+	if hexColorRegex.MatchString(c) {
+		if !strings.HasPrefix(c, "#") {
+			return "#" + c
+		}
+		return c
 	}
-	return c
+	return "#00A76F"
 }
 
 // PushNotification represents an ordinary push notification.

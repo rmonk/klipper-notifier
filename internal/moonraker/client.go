@@ -147,7 +147,10 @@ func (c *Client) GetPrinterInfo(ctx context.Context) (*PrinterInfo, error) {
 	return &res.Result, nil
 }
 
-// GetMetadata fetches metadata for a sliced gcode file. Cached in memory so it is only pulled once.
+// GetMetadata fetches metadata for a sliced gcode file. Results are cached in memory.
+// Concurrent callers for the same filename receive (nil, nil) while a fetch is in-flight,
+// which does not mean metadata is absent; callers should rely on ensureFileMetadata
+// which notifies listeners once metadata resolution completes.
 func (c *Client) GetMetadata(ctx context.Context, filename string) (*GCodeMetadata, error) {
 	if filename == "" {
 		return nil, nil
@@ -239,9 +242,50 @@ func (c *Client) ensureFileMetadata(ctx context.Context, filename string) {
 	c.notifyListeners(updated)
 }
 
+// ListObjects queries /printer/objects/list to dynamically discover available printer objects.
+func (c *Client) ListObjects(ctx context.Context) ([]string, error) {
+	u := c.httpBaseURL + "/printer/objects/list"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.applyAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("printer/objects/list returned status %d", resp.StatusCode)
+	}
+
+	var res struct {
+		Result struct {
+			Objects []string `json:"objects"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res.Result.Objects, nil
+}
+
 // QueryStatus queries current printer status via REST.
 func (c *Client) QueryStatus(ctx context.Context) (*MoonrakerStatus, error) {
-	u := c.httpBaseURL + "/printer/objects/query?print_stats&display_status&virtual_sdcard&heater_bed&extruder&toolhead&AFC&AFC_lane%20E0&AFC_lane%20E1&AFC_lane%20E2&AFC_lane%20E3"
+	queryObjs := []string{"print_stats", "display_status", "virtual_sdcard", "heater_bed", "extruder", "toolhead", "AFC"}
+
+	// Dynamically include any discovered AFC_lane objects
+	c.mu.Lock()
+	for laneKey := range c.afcLanes {
+		if strings.HasPrefix(laneKey, "AFC_lane") {
+			queryObjs = append(queryObjs, url.QueryEscape(laneKey))
+		}
+	}
+	c.mu.Unlock()
+
+	u := c.httpBaseURL + "/printer/objects/query?" + strings.Join(queryObjs, "&")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -327,24 +371,30 @@ func (c *Client) runWebSocket(ctx context.Context) error {
 
 	log.Printf("[Moonraker WS] Connected to %s", c.wsBaseURL)
 
-	// Subscribe to printer objects
+	// Discover and subscribe to printer objects
+	subObjects := map[string]interface{}{
+		"print_stats":    nil,
+		"display_status": nil,
+		"virtual_sdcard": nil,
+		"heater_bed":     nil,
+		"extruder":       nil,
+		"toolhead":       nil,
+		"AFC":            nil,
+	}
+
+	if objs, err := c.ListObjects(ctx); err == nil {
+		for _, o := range objs {
+			if strings.HasPrefix(o, "AFC_lane") {
+				subObjects[o] = nil
+			}
+		}
+	}
+
 	subReq := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"method":  "printer.objects.subscribe",
 		"params": map[string]interface{}{
-			"objects": map[string]interface{}{
-				"print_stats":    nil,
-				"display_status": nil,
-				"virtual_sdcard": nil,
-				"heater_bed":     nil,
-				"extruder":       nil,
-				"toolhead":       nil,
-				"AFC":            nil,
-				"AFC_lane E0":    nil,
-				"AFC_lane E1":    nil,
-				"AFC_lane E2":    nil,
-				"AFC_lane E3":    nil,
-			},
+			"objects": subObjects,
 		},
 		"id": 1,
 	}
@@ -410,6 +460,14 @@ func (c *Client) updateFromRawStatus(objects map[string]json.RawMessage) {
 	if raw, ok := objects["print_stats"]; ok {
 		var ps PrintStats
 		if err := json.Unmarshal(raw, &ps); err == nil {
+			if ps.Filename != "" && ps.Filename != c.status.Filename {
+				c.status.Filename = ps.Filename
+				c.status.FilamentType = ""
+				c.status.FilamentColor = ""
+				c.status.FilamentName = ""
+				c.status.TotalLayers = 0
+				c.status.EstimatedTime = 0
+			}
 			if ps.State != "" {
 				c.status.PrintState = ps.State
 			}
@@ -510,19 +568,31 @@ func (c *Client) updateFromRawStatus(objects map[string]json.RawMessage) {
 
 	// Resolve active filament from AFC
 	var activeLane *AFCLane
-	if c.afcRoot != nil && c.afcRoot.CurrentLane != "" {
-		if lane, ok := c.afcLanes[c.afcRoot.CurrentLane]; ok {
-			activeLane = lane
-		} else if lane, ok := c.afcLanes["AFC_lane "+c.afcRoot.CurrentLane]; ok {
-			activeLane = lane
+
+	// 1. Check current_load or current_lane from AFC state
+	if c.afcRoot != nil {
+		targetLane := c.afcRoot.CurrentLoad
+		if targetLane == "" {
+			targetLane = c.afcRoot.CurrentLane
+		}
+		if targetLane != "" {
+			if lane, ok := c.afcLanes[targetLane]; ok {
+				activeLane = lane
+			} else if lane, ok := c.afcLanes["AFC_lane "+targetLane]; ok {
+				activeLane = lane
+			}
 		}
 	}
 
-	if activeLane == nil && currentExtruder != "" {
+	// 2. Fallback: check lanes marked as Loaded or Tooled
+	if activeLane == nil {
 		for _, lane := range c.afcLanes {
-			if lane.Extruder == currentExtruder {
-				activeLane = lane
-				break
+			stLower := strings.ToLower(lane.Status)
+			if lane.ToolLoaded || stLower == "loaded" || stLower == "tooled" {
+				if currentExtruder == "" || lane.Extruder == currentExtruder {
+					activeLane = lane
+					break
+				}
 			}
 		}
 	}

@@ -75,6 +75,8 @@ type AFCLane struct {
 	FilamentName string `json:"filament_name"`
 	Color        string `json:"color"`
 	Extruder     string `json:"extruder"`
+	ToolLoaded   bool   `json:"tool_loaded"`
+	Load         bool   `json:"load"`
 	Status       string `json:"status"`
 }
 
@@ -185,31 +187,29 @@ func parseStringOrSlice(v interface{}) []string {
 	}
 	switch val := v.(type) {
 	case string:
-		// Could be "PLA;PETG" or "Generic PLA\";\"Generic PETG"
 		parts := strings.Split(val, ";")
-		res := make([]string, 0, len(parts))
-		for _, p := range parts {
+		res := make([]string, len(parts))
+		for i, p := range parts {
 			cleaned := strings.Trim(p, ` "';`)
-			cleaned = strings.TrimSpace(cleaned)
-			if cleaned != "" {
-				res = append(res, cleaned)
-			}
+			res[i] = strings.TrimSpace(cleaned)
 		}
 		return res
 	case []interface{}:
-		res := make([]string, 0, len(val))
-		for _, item := range val {
+		res := make([]string, len(val))
+		for i, item := range val {
 			if s, ok := item.(string); ok {
 				cleaned := strings.Trim(s, ` "';`)
-				cleaned = strings.TrimSpace(cleaned)
-				if cleaned != "" {
-					res = append(res, cleaned)
-				}
+				res[i] = strings.TrimSpace(cleaned)
 			}
 		}
 		return res
 	case []string:
-		return val
+		res := make([]string, len(val))
+		for i, s := range val {
+			cleaned := strings.Trim(s, ` "';`)
+			res[i] = strings.TrimSpace(cleaned)
+		}
+		return res
 	}
 	return nil
 }
@@ -225,25 +225,31 @@ func parseFloats(v interface{}) []float64 {
 		return []float64{float64(val)}
 	case string:
 		parts := strings.Split(val, ";")
-		res := make([]float64, 0, len(parts))
-		for _, p := range parts {
+		res := make([]float64, len(parts))
+		for i, p := range parts {
 			if num, err := strconv.ParseFloat(strings.TrimSpace(p), 64); err == nil {
-				res = append(res, num)
+				res[i] = num
+			} else {
+				res[i] = 0.0
 			}
 		}
 		return res
 	case []interface{}:
-		res := make([]float64, 0, len(val))
-		for _, item := range val {
+		res := make([]float64, len(val))
+		for i, item := range val {
 			switch num := item.(type) {
 			case float64:
-				res = append(res, num)
+				res[i] = num
 			case int:
-				res = append(res, float64(num))
+				res[i] = float64(num)
 			case string:
 				if n, err := strconv.ParseFloat(strings.TrimSpace(num), 64); err == nil {
-					res = append(res, n)
+					res[i] = n
+				} else {
+					res[i] = 0.0
 				}
+			default:
+				res[i] = 0.0
 			}
 		}
 		return res

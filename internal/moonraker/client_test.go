@@ -91,6 +91,7 @@ func TestMoonrakerQueryStatusWithAFC(t *testing.T) {
 							"filament_name": "Generic PLA",
 							"color":         "#000000",
 							"extruder":      "extruder",
+							"status":        "empty",
 						},
 						"AFC_lane E2": map[string]interface{}{
 							"name":          "E2",
@@ -98,6 +99,8 @@ func TestMoonrakerQueryStatusWithAFC(t *testing.T) {
 							"filament_name": "Generic PETG",
 							"color":         "#8E24AA",
 							"extruder":      "extruder2",
+							"status":        "Loaded",
+							"tool_loaded":   true,
 						},
 					},
 				},
@@ -169,7 +172,6 @@ func TestMoonrakerQueryStatusWithoutAFCFallbackAndSinglePull(t *testing.T) {
 						"extruder": map[string]interface{}{
 							"temperature": 215.0,
 						},
-						// No AFC present!
 					},
 				},
 			})
@@ -228,6 +230,31 @@ func TestMoonrakerQueryStatusWithoutAFCFallbackAndSinglePull(t *testing.T) {
 	}
 }
 
+func TestMoonrakerFilenameChangeResetsFilament(t *testing.T) {
+	client, err := NewClient("http://127.0.0.1:7125", "")
+	if err != nil {
+		t.Fatalf("client init error: %v", err)
+	}
+
+	client.status.Filename = "fileA.gcode"
+	client.status.FilamentType = "PLA"
+	client.status.FilamentColor = "#1E88E5"
+	client.status.FilamentName = "Generic Blue PLA"
+
+	// New filename arrived in print_stats
+	rawStats := map[string]json.RawMessage{
+		"print_stats": json.RawMessage(`{"filename":"fileB.gcode","state":"printing"}`),
+	}
+	client.updateFromRawStatus(rawStats)
+
+	if client.status.Filename != "fileB.gcode" {
+		t.Errorf("expected filename fileB.gcode, got %s", client.status.Filename)
+	}
+	if client.status.FilamentType != "" || client.status.FilamentColor != "" {
+		t.Errorf("expected filament reset on new filename, got type=%q color=%q", client.status.FilamentType, client.status.FilamentColor)
+	}
+}
+
 func TestGCodeMetadataFilamentParsing(t *testing.T) {
 	meta := &GCodeMetadata{
 		FilamentType:   "PLA;TPU;PETG;PETG",
@@ -245,5 +272,21 @@ func TestGCodeMetadataFilamentParsing(t *testing.T) {
 	}
 	if fName != "Bambu PETG HF @System" {
 		t.Errorf("expected Bambu PETG HF @System, got %s", fName)
+	}
+}
+
+func TestGCodeMetadataFilamentParsingWithEmptySlots(t *testing.T) {
+	meta := &GCodeMetadata{
+		FilamentType:   ";;PETG;PLA",
+		FilamentColour: ";;#8E24AA;#1E88E5",
+		FilamentWeight: ";;25.5;5.0",
+	}
+
+	fType, fColor, _ := meta.GetFilamentInfo()
+	if fType != "PETG + PLA" {
+		t.Errorf("expected 'PETG + PLA', got %s", fType)
+	}
+	if fColor != "#8E24AA" {
+		t.Errorf("expected primary color #8E24AA (highest weight), got %s", fColor)
 	}
 }

@@ -382,7 +382,9 @@ func formatJobBody(jobName string, st moonraker.MoonrakerStatus) string {
 
 func getPrintColor(st moonraker.MoonrakerStatus) string {
 	if st.FilamentColor != "" {
-		return st.FilamentColor
+		if tint := notify.FormatTint(st.FilamentColor); tint != "" {
+			return tint
+		}
 	}
 	return "teal"
 }
