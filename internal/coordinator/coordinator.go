@@ -144,6 +144,7 @@ func (c *Coordinator) startPrint(ctx context.Context, jobName string, progressPc
 		Status:   "Printing",
 		Symbol:   "printer.fill",
 		Color:    color,
+		Tint:     notify.FormatTint(color),
 		Progress: &progressPct,
 		EndsIn:   endsIn,
 	}
@@ -187,6 +188,7 @@ func (c *Coordinator) updateTile(ctx context.Context, status, color, symbol stri
 		Status:   status,
 		Symbol:   symbol,
 		Color:    color,
+		Tint:     notify.FormatTint(color),
 		Progress: &progressPct,
 		EndsIn:   endsIn,
 	}
@@ -230,6 +232,7 @@ func (c *Coordinator) completePrint(ctx context.Context, jobName string, st moon
 		Status:   "Done",
 		Symbol:   "checkmark.circle.fill",
 		Color:    "green",
+		Tint:     notify.FormatTint("green"),
 		Progress: &prog,
 	}
 
@@ -262,6 +265,7 @@ func (c *Coordinator) cancelPrint(ctx context.Context, jobName string, st moonra
 		Status:   "Stopped",
 		Symbol:   "xmark.circle.fill",
 		Color:    "gray",
+		Tint:     notify.FormatTint("gray"),
 		Progress: &prog,
 	}
 
@@ -279,6 +283,7 @@ func (c *Coordinator) errorPrint(ctx context.Context, jobName string, st moonrak
 		Status:   "Failed",
 		Symbol:   "exclamationmark.triangle.fill",
 		Color:    "red",
+		Tint:     notify.FormatTint("red"),
 		Progress: &prog,
 	}
 

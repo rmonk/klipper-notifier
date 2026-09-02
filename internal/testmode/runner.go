@@ -134,6 +134,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		Status:   "Printing",
 		Symbol:   "printer.fill",
 		Color:    fil0.color,
+		Tint:     notify.FormatTint(fil0.color),
 		Progress: &p0,
 		EndsIn:   &e0,
 	}
@@ -181,6 +182,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		Status:   "Printing",
 		Symbol:   "printer.fill",
 		Color:    fil25.color,
+		Tint:     notify.FormatTint(fil25.color),
 		Progress: &p25,
 		EndsIn:   &e25,
 	}
@@ -215,6 +217,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		Status:   "Printing",
 		Symbol:   "printer.fill",
 		Color:    fil50.color,
+		Tint:     notify.FormatTint(fil50.color),
 		Progress: &p50,
 		EndsIn:   &e50,
 	}
@@ -249,6 +252,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		Status:   "Printing",
 		Symbol:   "printer.fill",
 		Color:    fil75.color,
+		Tint:     notify.FormatTint(fil75.color),
 		Progress: &p75,
 		EndsIn:   &e75,
 	}
@@ -280,6 +284,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		Status:   "Done",
 		Symbol:   "checkmark.circle.fill",
 		Color:    "green",
+		Tint:     notify.FormatTint("green"),
 		Progress: &p100,
 	}
 	if r.cfg.ShowMetrics {

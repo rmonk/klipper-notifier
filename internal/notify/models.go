@@ -2,6 +2,7 @@ package notify
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -28,11 +29,46 @@ type TileContent struct {
 	Status   string       `json:"status,omitempty"`
 	Symbol   string       `json:"symbol,omitempty"`
 	Color    string       `json:"color,omitempty"`
+	Tint     string       `json:"tint,omitempty"`
 	Progress *int         `json:"progress,omitempty"`
 	EndsIn   *int         `json:"endsIn,omitempty"`
 	Trailing string       `json:"trailing,omitempty"`
 	Metrics  []MetricChip `json:"metrics,omitempty"`
 	Buttons  []TileButton `json:"buttons,omitempty"`
+}
+
+// FormatTint normalizes a color name or hex code into a valid #RRGGBB tint hex string for Notify!
+func FormatTint(c string) string {
+	c = strings.TrimSpace(c)
+	if c == "" {
+		return ""
+	}
+	switch strings.ToLower(c) {
+	case "teal":
+		return "#00A76F"
+	case "green":
+		return "#34C759"
+	case "orange":
+		return "#FF9500"
+	case "red":
+		return "#FF3B30"
+	case "blue":
+		return "#007AFF"
+	case "purple":
+		return "#AF52DE"
+	case "indigo":
+		return "#5856D6"
+	case "pink":
+		return "#FF2D55"
+	case "yellow":
+		return "#FFCC00"
+	case "gray", "grey":
+		return "#8E8E93"
+	}
+	if !strings.HasPrefix(c, "#") {
+		return "#" + c
+	}
+	return c
 }
 
 // PushNotification represents an ordinary push notification.

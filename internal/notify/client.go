@@ -120,6 +120,12 @@ func (c *Client) Start(ctx context.Context, content TileContent) (*StartedActivi
 	q.Set("new", "1")
 	u.RawQuery = q.Encode()
 
+	if content.Tint == "" && content.Color != "" {
+		content.Tint = FormatTint(content.Color)
+	} else if content.Tint != "" {
+		content.Tint = FormatTint(content.Tint)
+	}
+
 	data, err := json.Marshal(content)
 	if err != nil {
 		return nil, err
@@ -163,9 +169,15 @@ func (c *Client) Start(ctx context.Context, content TileContent) (*StartedActivi
 
 // Update updates an ongoing Live Activity tile.
 func (c *Client) Update(ctx context.Context, activityID string, content TileContent) error {
+	if content.Tint == "" && content.Color != "" {
+		content.Tint = FormatTint(content.Color)
+	} else if content.Tint != "" {
+		content.Tint = FormatTint(content.Tint)
+	}
+
 	if c.dryRun {
-		log.Printf("[DRY-RUN] Updating Live Activity %s: title=%q progress=%v status=%q endsIn=%v",
-			activityID, content.Title, content.Progress, content.Status, content.EndsIn)
+		log.Printf("[DRY-RUN] Updating Live Activity %s: title=%q progress=%v status=%q tint=%q endsIn=%v",
+			activityID, content.Title, content.Progress, content.Status, content.Tint, content.EndsIn)
 		return nil
 	}
 
@@ -221,6 +233,12 @@ func (c *Client) End(ctx context.Context, activityID string, content *TileConten
 		"keepFor": keepFor,
 	}
 	if content != nil {
+		if content.Tint == "" && content.Color != "" {
+			content.Tint = FormatTint(content.Color)
+		} else if content.Tint != "" {
+			content.Tint = FormatTint(content.Tint)
+		}
+
 		if content.Title != "" {
 			payload["title"] = content.Title
 		}
@@ -235,6 +253,9 @@ func (c *Client) End(ctx context.Context, activityID string, content *TileConten
 		}
 		if content.Color != "" {
 			payload["color"] = content.Color
+		}
+		if content.Tint != "" {
+			payload["tint"] = content.Tint
 		}
 		if content.Progress != nil {
 			payload["progress"] = *content.Progress
