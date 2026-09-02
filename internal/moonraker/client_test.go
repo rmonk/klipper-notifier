@@ -313,3 +313,54 @@ func TestGCodeMetadataFilamentParsingWithEmptySlots(t *testing.T) {
 		t.Errorf("expected primary color #8E24AA (highest weight), got %s", fColor)
 	}
 }
+
+func TestAFCLanePartialUpdatePreservesFields(t *testing.T) {
+	client, err := NewClient("http://127.0.0.1:7125", "")
+	if err != nil {
+		t.Fatalf("client init error: %v", err)
+	}
+
+	// 1. Initial full snapshot
+	fullSnapshot := map[string]json.RawMessage{
+		"AFC": json.RawMessage(`{"current_lane":"E1","lanes":["E0","E1"]}`),
+		"AFC_lane E1": json.RawMessage(`{
+			"name": "E1",
+			"material": "PETG",
+			"filament_name": "Generic PETG",
+			"color": "#8E24AA",
+			"extruder": "extruder",
+			"status": "Loaded"
+		}`),
+	}
+	client.updateFromRawStatus(fullSnapshot)
+
+	if client.status.FilamentType != "PETG" || client.status.FilamentColor != "#8E24AA" {
+		t.Fatalf("expected initial PETG #8E24AA, got type=%q color=%q", client.status.FilamentType, client.status.FilamentColor)
+	}
+
+	// 2. Partial WebSocket update sending only status change
+	partialUpdate := map[string]json.RawMessage{
+		"AFC_lane E1": json.RawMessage(`{"status":"Tooled"}`),
+	}
+	client.updateFromRawStatus(partialUpdate)
+
+	lane := client.afcLanes["AFC_lane E1"]
+	if lane == nil {
+		t.Fatal("expected AFC_lane E1 to exist in afcLanes")
+	}
+	if lane.Status != "Tooled" {
+		t.Errorf("expected status Tooled, got %s", lane.Status)
+	}
+	if lane.Material != "PETG" {
+		t.Errorf("expected material PETG preserved, got %s", lane.Material)
+	}
+	if lane.Color != "#8E24AA" {
+		t.Errorf("expected color #8E24AA preserved, got %s", lane.Color)
+	}
+	if lane.Extruder != "extruder" {
+		t.Errorf("expected extruder preserved, got %s", lane.Extruder)
+	}
+	if client.status.FilamentType != "PETG" {
+		t.Errorf("expected status filament type PETG preserved, got %s", client.status.FilamentType)
+	}
+}

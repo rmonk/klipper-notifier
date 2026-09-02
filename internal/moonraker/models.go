@@ -109,7 +109,7 @@ func (m *GCodeMetadata) GetFilamentInfo() (filType string, filColor string, filN
 	names := parseStringOrSlice(m.FilamentName)
 	weights := parseFloats(m.FilamentWeight)
 
-	if len(types) == 0 && len(names) == 0 {
+	if len(types) == 0 && len(names) == 0 && len(colors) == 0 {
 		return "", "", ""
 	}
 

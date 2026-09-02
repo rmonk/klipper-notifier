@@ -220,6 +220,10 @@ func (c *Client) ensureFileMetadata(ctx context.Context, filename string) {
 	}
 
 	c.mu.Lock()
+	if c.status.Filename != filename {
+		c.mu.Unlock()
+		return
+	}
 	if meta.LayerCount > 0 && c.status.TotalLayers == 0 {
 		c.status.TotalLayers = meta.LayerCount
 	}
@@ -479,11 +483,16 @@ func (c *Client) updateFromRawStatus(objects map[string]json.RawMessage) {
 		if err := json.Unmarshal(raw, &ps); err == nil {
 			if ps.Filename != "" && ps.Filename != c.status.Filename {
 				c.status.Filename = ps.Filename
+				c.status.Progress = 0
+				c.status.PrintDuration = 0
+				c.status.TotalDuration = 0
+				c.status.CurrentLayer = 0
+				c.status.TotalLayers = 0
+				c.status.EstimatedTime = 0
 				c.status.FilamentType = ""
 				c.status.FilamentColor = ""
 				c.status.FilamentName = ""
-				c.status.TotalLayers = 0
-				c.status.EstimatedTime = 0
+				c.status.Message = ""
 			}
 			if ps.State != "" {
 				c.status.PrintState = ps.State
@@ -562,22 +571,25 @@ func (c *Client) updateFromRawStatus(objects map[string]json.RawMessage) {
 		}
 	}
 
-	// Parse AFC root object
+	// Parse AFC root object (merge partial diffs)
 	if raw, ok := objects["AFC"]; ok {
-		var afc AFCObject
-		if err := json.Unmarshal(raw, &afc); err == nil {
-			c.afcRoot = &afc
+		if c.afcRoot == nil {
+			c.afcRoot = &AFCObject{}
 		}
+		_ = json.Unmarshal(raw, c.afcRoot)
 	}
 
-	// Parse all AFC_lane objects
+	// Parse all AFC_lane objects (merge partial diffs into existing cache)
 	for k, v := range objects {
 		if strings.HasPrefix(k, "AFC_lane") {
-			var lane AFCLane
-			if err := json.Unmarshal(v, &lane); err == nil {
-				c.afcLanes[k] = &lane
+			lane, exists := c.afcLanes[k]
+			if !exists || lane == nil {
+				lane = &AFCLane{}
+			}
+			if err := json.Unmarshal(v, lane); err == nil {
+				c.afcLanes[k] = lane
 				if lane.Name != "" {
-					c.afcLanes[lane.Name] = &lane
+					c.afcLanes[lane.Name] = lane
 				}
 			}
 		}
