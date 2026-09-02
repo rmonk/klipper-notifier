@@ -24,6 +24,8 @@ type Client struct {
 	mu        sync.Mutex
 	status    MoonrakerStatus
 	metadata  map[string]*GCodeMetadata
+	afcLanes  map[string]*AFCLane
+	afcRoot   *AFCObject
 	listeners []func(MoonrakerStatus)
 }
 
@@ -56,6 +58,7 @@ func NewClient(rawURL, apiKey string) (*Client, error) {
 			Timeout: 10 * time.Second,
 		},
 		metadata: make(map[string]*GCodeMetadata),
+		afcLanes: make(map[string]*AFCLane),
 	}, nil
 }
 
@@ -188,7 +191,7 @@ func (c *Client) GetMetadata(ctx context.Context, filename string) (*GCodeMetada
 
 // QueryStatus queries current printer status via REST.
 func (c *Client) QueryStatus(ctx context.Context) (*MoonrakerStatus, error) {
-	u := c.httpBaseURL + "/printer/objects/query?print_stats&display_status&virtual_sdcard&heater_bed&extruder&toolhead"
+	u := c.httpBaseURL + "/printer/objects/query?print_stats&display_status&virtual_sdcard&heater_bed&extruder&toolhead&AFC&AFC_lane%20E0&AFC_lane%20E1&AFC_lane%20E2&AFC_lane%20E3"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -207,14 +210,7 @@ func (c *Client) QueryStatus(ctx context.Context) (*MoonrakerStatus, error) {
 
 	var res struct {
 		Result struct {
-			Status struct {
-				PrintStats    *PrintStats    `json:"print_stats"`
-				DisplayStatus *DisplayStatus `json:"display_status"`
-				VirtualSDCard *VirtualSDCard `json:"virtual_sdcard"`
-				HeaterBed     *HeaterBed     `json:"heater_bed"`
-				Extruder      *Extruder      `json:"extruder"`
-				Toolhead      *Toolhead      `json:"toolhead"`
-			} `json:"status"`
+			Status map[string]json.RawMessage `json:"status"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
@@ -222,8 +218,7 @@ func (c *Client) QueryStatus(ctx context.Context) (*MoonrakerStatus, error) {
 	}
 
 	c.mu.Lock()
-	c.updateFromObjects(res.Result.Status.PrintStats, res.Result.Status.DisplayStatus,
-		res.Result.Status.VirtualSDCard, res.Result.Status.HeaterBed, res.Result.Status.Extruder, res.Result.Status.Toolhead)
+	c.updateFromRawStatus(res.Result.Status)
 	current := c.status
 	c.mu.Unlock()
 
@@ -235,6 +230,18 @@ func (c *Client) QueryStatus(ctx context.Context) (*MoonrakerStatus, error) {
 			}
 			if meta.EstimatedTime > 0 && c.status.EstimatedTime == 0 {
 				c.status.EstimatedTime = meta.EstimatedTime
+			}
+			if c.status.FilamentType == "" {
+				fType, fColor, fName := meta.GetFilamentInfo()
+				if fType != "" {
+					c.status.FilamentType = fType
+				}
+				if fColor != "" && c.status.FilamentColor == "" {
+					c.status.FilamentColor = fColor
+				}
+				if fName != "" && c.status.FilamentName == "" {
+					c.status.FilamentName = fName
+				}
 			}
 			current = c.status
 			c.mu.Unlock()
@@ -301,6 +308,11 @@ func (c *Client) runWebSocket(ctx context.Context) error {
 				"heater_bed":     nil,
 				"extruder":       nil,
 				"toolhead":       nil,
+				"AFC":            nil,
+				"AFC_lane E0":    nil,
+				"AFC_lane E1":    nil,
+				"AFC_lane E2":    nil,
+				"AFC_lane E3":    nil,
 			},
 		},
 		"id": 1,
@@ -335,22 +347,15 @@ func (c *Client) handleWSMessage(ctx context.Context, msg []byte) {
 	}
 
 	if raw.Method == "notify_status_update" {
-		var params []struct {
-			PrintStats    *PrintStats    `json:"print_stats"`
-			DisplayStatus *DisplayStatus `json:"display_status"`
-			VirtualSDCard *VirtualSDCard `json:"virtual_sdcard"`
-			HeaterBed     *HeaterBed     `json:"heater_bed"`
-			Extruder      *Extruder      `json:"extruder"`
-			Toolhead      *Toolhead      `json:"toolhead"`
-		}
+		var params []map[string]json.RawMessage
 		if err := json.Unmarshal(raw.Params, &params); err == nil && len(params) > 0 {
-			p := params[0]
+			rawObjects := params[0]
 			c.mu.Lock()
-			c.updateFromObjects(p.PrintStats, p.DisplayStatus, p.VirtualSDCard, p.HeaterBed, p.Extruder, p.Toolhead)
+			c.updateFromRawStatus(rawObjects)
 			st := c.status
 			c.mu.Unlock()
 
-			if st.Filename != "" && (st.TotalLayers == 0 || st.EstimatedTime == 0) {
+			if st.Filename != "" {
 				go func(fn string) {
 					if meta, _ := c.GetMetadata(ctx, fn); meta != nil {
 						c.mu.Lock()
@@ -359,6 +364,18 @@ func (c *Client) handleWSMessage(ctx context.Context, msg []byte) {
 						}
 						if meta.EstimatedTime > 0 && c.status.EstimatedTime == 0 {
 							c.status.EstimatedTime = meta.EstimatedTime
+						}
+						if c.status.FilamentType == "" {
+							fType, fColor, fName := meta.GetFilamentInfo()
+							if fType != "" {
+								c.status.FilamentType = fType
+							}
+							if fColor != "" && c.status.FilamentColor == "" {
+								c.status.FilamentColor = fColor
+							}
+							if fName != "" && c.status.FilamentName == "" {
+								c.status.FilamentName = fName
+							}
 						}
 						updated := c.status
 						c.mu.Unlock()
@@ -383,60 +400,136 @@ func (c *Client) handleWSMessage(ctx context.Context, msg []byte) {
 	}
 }
 
-func (c *Client) updateFromObjects(ps *PrintStats, ds *DisplayStatus, vs *VirtualSDCard, hb *HeaterBed, ex *Extruder, th *Toolhead) {
-	if ps != nil {
-		if ps.State != "" {
-			c.status.PrintState = ps.State
-		}
-		if ps.Filename != "" {
-			c.status.Filename = ps.Filename
-		}
-		if ps.PrintDuration > 0 {
-			c.status.PrintDuration = ps.PrintDuration
-		}
-		if ps.TotalDuration > 0 {
-			c.status.TotalDuration = ps.TotalDuration
-		}
-		if ps.Message != "" {
-			c.status.Message = ps.Message
-		}
-		if ps.Info.CurrentLayer != nil {
-			c.status.CurrentLayer = *ps.Info.CurrentLayer
-		}
-		if ps.Info.TotalLayer != nil {
-			c.status.TotalLayers = *ps.Info.TotalLayer
-		}
-	}
-
-	if ds != nil {
-		if ds.Progress > 0 {
-			c.status.Progress = ds.Progress
-		}
-		if ds.Message != "" {
-			c.status.Message = ds.Message
+func (c *Client) updateFromRawStatus(objects map[string]json.RawMessage) {
+	if raw, ok := objects["print_stats"]; ok {
+		var ps PrintStats
+		if err := json.Unmarshal(raw, &ps); err == nil {
+			if ps.State != "" {
+				c.status.PrintState = ps.State
+			}
+			if ps.Filename != "" {
+				c.status.Filename = ps.Filename
+			}
+			if ps.PrintDuration > 0 {
+				c.status.PrintDuration = ps.PrintDuration
+			}
+			if ps.TotalDuration > 0 {
+				c.status.TotalDuration = ps.TotalDuration
+			}
+			if ps.Message != "" {
+				c.status.Message = ps.Message
+			}
+			if ps.Info.CurrentLayer != nil {
+				c.status.CurrentLayer = *ps.Info.CurrentLayer
+			}
+			if ps.Info.TotalLayer != nil {
+				c.status.TotalLayers = *ps.Info.TotalLayer
+			}
 		}
 	}
 
-	if vs != nil && vs.Progress > 0 && c.status.Progress == 0 {
-		c.status.Progress = vs.Progress
+	if raw, ok := objects["display_status"]; ok {
+		var ds DisplayStatus
+		if err := json.Unmarshal(raw, &ds); err == nil {
+			if ds.Progress > 0 {
+				c.status.Progress = ds.Progress
+			}
+			if ds.Message != "" {
+				c.status.Message = ds.Message
+			}
+		}
 	}
 
-	if hb != nil {
-		c.status.BedTemp = hb.Temperature
-		c.status.BedTarget = hb.Target
+	if raw, ok := objects["virtual_sdcard"]; ok {
+		var vs VirtualSDCard
+		if err := json.Unmarshal(raw, &vs); err == nil {
+			if vs.Progress > 0 && c.status.Progress == 0 {
+				c.status.Progress = vs.Progress
+			}
+		}
 	}
 
-	if ex != nil {
-		c.status.ExtruderTemp = ex.Temperature
-		c.status.ExtruderTarget = ex.Target
+	if raw, ok := objects["heater_bed"]; ok {
+		var hb HeaterBed
+		if err := json.Unmarshal(raw, &hb); err == nil {
+			c.status.BedTemp = hb.Temperature
+			c.status.BedTarget = hb.Target
+		}
 	}
 
-	if th != nil && len(th.Position) >= 3 {
-		// Toolhead Z position can help estimate layer if not reported in print_stats
-		z := th.Position[2]
-		if c.status.CurrentLayer == 0 && z > 0 {
-			// rough approximation: if layer height 0.2, layer = z / 0.2
-			c.status.CurrentLayer = int(z / 0.2)
+	if raw, ok := objects["extruder"]; ok {
+		var ex Extruder
+		if err := json.Unmarshal(raw, &ex); err == nil {
+			c.status.ExtruderTemp = ex.Temperature
+			c.status.ExtruderTarget = ex.Target
+		}
+	}
+
+	var currentExtruder string
+	if raw, ok := objects["toolhead"]; ok {
+		var th Toolhead
+		if err := json.Unmarshal(raw, &th); err == nil {
+			if th.Extruder != "" {
+				currentExtruder = th.Extruder
+			}
+			if len(th.Position) >= 3 {
+				z := th.Position[2]
+				if c.status.CurrentLayer == 0 && z > 0 {
+					c.status.CurrentLayer = int(z / 0.2)
+				}
+			}
+		}
+	}
+
+	// Parse AFC root object
+	if raw, ok := objects["AFC"]; ok {
+		var afc AFCObject
+		if err := json.Unmarshal(raw, &afc); err == nil {
+			c.afcRoot = &afc
+		}
+	}
+
+	// Parse all AFC_lane objects
+	for k, v := range objects {
+		if strings.HasPrefix(k, "AFC_lane") {
+			var lane AFCLane
+			if err := json.Unmarshal(v, &lane); err == nil {
+				c.afcLanes[k] = &lane
+				if lane.Name != "" {
+					c.afcLanes[lane.Name] = &lane
+				}
+			}
+		}
+	}
+
+	// Resolve active filament from AFC
+	var activeLane *AFCLane
+	if c.afcRoot != nil && c.afcRoot.CurrentLane != "" {
+		if lane, ok := c.afcLanes[c.afcRoot.CurrentLane]; ok {
+			activeLane = lane
+		} else if lane, ok := c.afcLanes["AFC_lane "+c.afcRoot.CurrentLane]; ok {
+			activeLane = lane
+		}
+	}
+
+	if activeLane == nil && currentExtruder != "" {
+		for _, lane := range c.afcLanes {
+			if lane.Extruder == currentExtruder {
+				activeLane = lane
+				break
+			}
+		}
+	}
+
+	if activeLane != nil {
+		if activeLane.Material != "" {
+			c.status.FilamentType = activeLane.Material
+		}
+		if activeLane.Color != "" {
+			c.status.FilamentColor = activeLane.Color
+		}
+		if activeLane.FilamentName != "" {
+			c.status.FilamentName = activeLane.FilamentName
 		}
 	}
 }

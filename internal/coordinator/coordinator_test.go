@@ -28,6 +28,34 @@ func TestCleanJobName(t *testing.T) {
 	}
 }
 
+func TestFormatJobBody(t *testing.T) {
+	st1 := moonraker.MoonrakerStatus{
+		FilamentType: "PETG",
+	}
+	if got := formatJobBody("3DBenchy", st1); got != "3DBenchy • PETG" {
+		t.Errorf("expected '3DBenchy • PETG', got %q", got)
+	}
+
+	st2 := moonraker.MoonrakerStatus{}
+	if got := formatJobBody("3DBenchy", st2); got != "3DBenchy" {
+		t.Errorf("expected '3DBenchy', got %q", got)
+	}
+}
+
+func TestGetPrintColor(t *testing.T) {
+	st1 := moonraker.MoonrakerStatus{
+		FilamentColor: "#8E24AA",
+	}
+	if got := getPrintColor(st1); got != "#8E24AA" {
+		t.Errorf("expected '#8E24AA', got %q", got)
+	}
+
+	st2 := moonraker.MoonrakerStatus{}
+	if got := getPrintColor(st2); got != "teal" {
+		t.Errorf("expected 'teal', got %q", got)
+	}
+}
+
 func TestCalculateEndsIn(t *testing.T) {
 	st := moonraker.MoonrakerStatus{
 		EstimatedTime: 3600,
@@ -67,6 +95,8 @@ func TestCoordinatorTransitions(t *testing.T) {
 		CurrentLayer:  10,
 		ExtruderTemp:  210,
 		BedTemp:       60,
+		FilamentType:  "PETG",
+		FilamentColor: "#8E24AA",
 	})
 
 	if coord.activityID == "" {

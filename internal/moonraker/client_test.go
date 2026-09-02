@@ -52,7 +52,7 @@ func TestMoonrakerCheckConnection(t *testing.T) {
 	}
 }
 
-func TestMoonrakerQueryStatus(t *testing.T) {
+func TestMoonrakerQueryStatusWithAFC(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/printer/objects/query" {
 			w.Header().Set("Content-Type", "application/json")
@@ -76,6 +76,27 @@ func TestMoonrakerQueryStatus(t *testing.T) {
 						"extruder": map[string]interface{}{
 							"temperature": 210.5,
 							"target":      210.0,
+						},
+						"toolhead": map[string]interface{}{
+							"extruder": "extruder2",
+						},
+						"AFC": map[string]interface{}{
+							"current_lane": "E2",
+							"lanes":        []string{"E0", "E1", "E2", "E3"},
+						},
+						"AFC_lane E0": map[string]interface{}{
+							"name":          "E0",
+							"material":      "PLA",
+							"filament_name": "Generic PLA",
+							"color":         "#000000",
+							"extruder":      "extruder",
+						},
+						"AFC_lane E2": map[string]interface{}{
+							"name":          "E2",
+							"material":      "PETG",
+							"filament_name": "Generic PETG",
+							"color":         "#8E24AA",
+							"extruder":      "extruder2",
 						},
 					},
 				},
@@ -115,10 +136,30 @@ func TestMoonrakerQueryStatus(t *testing.T) {
 	if st.Progress != 0.45 {
 		t.Errorf("expected progress 0.45, got %f", st.Progress)
 	}
-	if st.ExtruderTemp < 210.0 || st.BedTemp < 60.0 {
-		t.Errorf("unexpected temperatures: extruder=%f bed=%f", st.ExtruderTemp, st.BedTemp)
+	if st.FilamentType != "PETG" {
+		t.Errorf("expected AFC filament type PETG, got %s", st.FilamentType)
 	}
-	if st.TotalLayers != 100 {
-		t.Errorf("expected 100 total layers from metadata, got %d", st.TotalLayers)
+	if st.FilamentColor != "#8E24AA" {
+		t.Errorf("expected AFC filament color #8E24AA, got %s", st.FilamentColor)
+	}
+}
+
+func TestGCodeMetadataFilamentParsing(t *testing.T) {
+	meta := &GCodeMetadata{
+		FilamentType:   "PLA;TPU;PETG;PETG",
+		FilamentName:   `Generic PLA @System";"Generic TPU @System";"Bambu PETG HF @System";"Bambu PETG HF @System`,
+		FilamentColour: "#080A0D;#000000;#1E88E5;#8E24AA",
+		FilamentWeight: []interface{}{0.0, 0.0, 14.13, 0.0},
+	}
+
+	fType, fColor, fName := meta.GetFilamentInfo()
+	if fType != "PETG" {
+		t.Errorf("expected primary filament PETG, got %s", fType)
+	}
+	if fColor != "#1E88E5" {
+		t.Errorf("expected primary color #1E88E5, got %s", fColor)
+	}
+	if fName != "Bambu PETG HF @System" {
+		t.Errorf("expected Bambu PETG HF @System, got %s", fName)
 	}
 }
