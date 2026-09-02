@@ -9,10 +9,7 @@
 
 services:
   notify-klipper:
-    build:
-      context: .
-      dockerfile: Containerfile
-    image: notify-klipper:0.1.0
+    image: ghcr.io/rmonk/klipper-notifier:latest
     container_name: notify-klipper
     restart: on-failure:5
     stop_grace_period: 15s
@@ -43,9 +40,3 @@ services:
       resources:
         limits:
           memory: 64M
-
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
