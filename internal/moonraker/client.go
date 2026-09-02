@@ -21,12 +21,13 @@ type Client struct {
 	apiKey      string
 	httpClient  *http.Client
 
-	mu        sync.Mutex
-	status    MoonrakerStatus
-	metadata  map[string]*GCodeMetadata
-	afcLanes  map[string]*AFCLane
-	afcRoot   *AFCObject
-	listeners []func(MoonrakerStatus)
+	mu           sync.Mutex
+	status       MoonrakerStatus
+	metadata     map[string]*GCodeMetadata
+	metaFetching map[string]bool
+	afcLanes     map[string]*AFCLane
+	afcRoot      *AFCObject
+	listeners    []func(MoonrakerStatus)
 }
 
 func NewClient(rawURL, apiKey string) (*Client, error) {
@@ -57,8 +58,9 @@ func NewClient(rawURL, apiKey string) (*Client, error) {
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		metadata: make(map[string]*GCodeMetadata),
-		afcLanes: make(map[string]*AFCLane),
+		metadata:     make(map[string]*GCodeMetadata),
+		metaFetching: make(map[string]bool),
+		afcLanes:     make(map[string]*AFCLane),
 	}, nil
 }
 
@@ -145,7 +147,7 @@ func (c *Client) GetPrinterInfo(ctx context.Context) (*PrinterInfo, error) {
 	return &res.Result, nil
 }
 
-// GetMetadata fetches metadata for a sliced gcode file.
+// GetMetadata fetches metadata for a sliced gcode file. Cached in memory so it is only pulled once.
 func (c *Client) GetMetadata(ctx context.Context, filename string) (*GCodeMetadata, error) {
 	if filename == "" {
 		return nil, nil
@@ -156,7 +158,18 @@ func (c *Client) GetMetadata(ctx context.Context, filename string) (*GCodeMetada
 		c.mu.Unlock()
 		return meta, nil
 	}
+	if c.metaFetching[filename] {
+		c.mu.Unlock()
+		return nil, nil
+	}
+	c.metaFetching[filename] = true
 	c.mu.Unlock()
+
+	defer func() {
+		c.mu.Lock()
+		delete(c.metaFetching, filename)
+		c.mu.Unlock()
+	}()
 
 	u := fmt.Sprintf("%s/server/files/metadata?filename=%s", c.httpBaseURL, url.QueryEscape(filename))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -187,6 +200,43 @@ func (c *Client) GetMetadata(ctx context.Context, filename string) (*GCodeMetada
 	c.mu.Unlock()
 
 	return &res.Result, nil
+}
+
+// ensureFileMetadata pulls gcode metadata once per print/file and applies ETA/layers and filament fallback if no AFC.
+func (c *Client) ensureFileMetadata(ctx context.Context, filename string) {
+	if filename == "" {
+		return
+	}
+
+	meta, err := c.GetMetadata(ctx, filename)
+	if err != nil || meta == nil {
+		return
+	}
+
+	c.mu.Lock()
+	if meta.LayerCount > 0 && c.status.TotalLayers == 0 {
+		c.status.TotalLayers = meta.LayerCount
+	}
+	if meta.EstimatedTime > 0 && c.status.EstimatedTime == 0 {
+		c.status.EstimatedTime = meta.EstimatedTime
+	}
+	// If no AFC was detected or AFC gave no filament info, fallback to gcode metadata
+	if c.status.FilamentType == "" {
+		fType, fColor, fName := meta.GetFilamentInfo()
+		if fType != "" {
+			c.status.FilamentType = fType
+		}
+		if fColor != "" && c.status.FilamentColor == "" {
+			c.status.FilamentColor = fColor
+		}
+		if fName != "" && c.status.FilamentName == "" {
+			c.status.FilamentName = fName
+		}
+	}
+	updated := c.status
+	c.mu.Unlock()
+
+	c.notifyListeners(updated)
 }
 
 // QueryStatus queries current printer status via REST.
@@ -223,29 +273,10 @@ func (c *Client) QueryStatus(ctx context.Context) (*MoonrakerStatus, error) {
 	c.mu.Unlock()
 
 	if current.Filename != "" {
-		if meta, _ := c.GetMetadata(ctx, current.Filename); meta != nil {
-			c.mu.Lock()
-			if meta.LayerCount > 0 && c.status.TotalLayers == 0 {
-				c.status.TotalLayers = meta.LayerCount
-			}
-			if meta.EstimatedTime > 0 && c.status.EstimatedTime == 0 {
-				c.status.EstimatedTime = meta.EstimatedTime
-			}
-			if c.status.FilamentType == "" {
-				fType, fColor, fName := meta.GetFilamentInfo()
-				if fType != "" {
-					c.status.FilamentType = fType
-				}
-				if fColor != "" && c.status.FilamentColor == "" {
-					c.status.FilamentColor = fColor
-				}
-				if fName != "" && c.status.FilamentName == "" {
-					c.status.FilamentName = fName
-				}
-			}
-			current = c.status
-			c.mu.Unlock()
-		}
+		c.ensureFileMetadata(ctx, current.Filename)
+		c.mu.Lock()
+		current = c.status
+		c.mu.Unlock()
 	}
 
 	return &current, nil
@@ -356,32 +387,7 @@ func (c *Client) handleWSMessage(ctx context.Context, msg []byte) {
 			c.mu.Unlock()
 
 			if st.Filename != "" {
-				go func(fn string) {
-					if meta, _ := c.GetMetadata(ctx, fn); meta != nil {
-						c.mu.Lock()
-						if meta.LayerCount > 0 && c.status.TotalLayers == 0 {
-							c.status.TotalLayers = meta.LayerCount
-						}
-						if meta.EstimatedTime > 0 && c.status.EstimatedTime == 0 {
-							c.status.EstimatedTime = meta.EstimatedTime
-						}
-						if c.status.FilamentType == "" {
-							fType, fColor, fName := meta.GetFilamentInfo()
-							if fType != "" {
-								c.status.FilamentType = fType
-							}
-							if fColor != "" && c.status.FilamentColor == "" {
-								c.status.FilamentColor = fColor
-							}
-							if fName != "" && c.status.FilamentName == "" {
-								c.status.FilamentName = fName
-							}
-						}
-						updated := c.status
-						c.mu.Unlock()
-						c.notifyListeners(updated)
-					}
-				}(st.Filename)
+				go c.ensureFileMetadata(ctx, st.Filename)
 			}
 
 			c.notifyListeners(st)

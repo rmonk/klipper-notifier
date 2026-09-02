@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -141,6 +142,89 @@ func TestMoonrakerQueryStatusWithAFC(t *testing.T) {
 	}
 	if st.FilamentColor != "#8E24AA" {
 		t.Errorf("expected AFC filament color #8E24AA, got %s", st.FilamentColor)
+	}
+}
+
+func TestMoonrakerQueryStatusWithoutAFCFallbackAndSinglePull(t *testing.T) {
+	var metaCalls int32
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/printer/objects/query" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"result": map[string]interface{}{
+					"status": map[string]interface{}{
+						"print_stats": map[string]interface{}{
+							"filename":       "benchy_fallback.gcode",
+							"state":          "printing",
+							"print_duration": 60.0,
+							"total_duration": 80.0,
+						},
+						"display_status": map[string]interface{}{
+							"progress": 0.20,
+						},
+						"heater_bed": map[string]interface{}{
+							"temperature": 60.0,
+						},
+						"extruder": map[string]interface{}{
+							"temperature": 215.0,
+						},
+						// No AFC present!
+					},
+				},
+			})
+			return
+		}
+		if r.URL.Path == "/server/files/metadata" {
+			atomic.AddInt32(&metaCalls, 1)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"result": map[string]interface{}{
+					"estimated_time":  600.0,
+					"layer_count":     250,
+					"filament_type":   "PLA",
+					"filament_colour": "#1E88E5",
+					"filament_name":   "Polymaker PolyLite PLA",
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	client, err := NewClient(ts.URL, "")
+	if err != nil {
+		t.Fatalf("client init error: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// 1st query -> fetches metadata from gcode
+	st1, err := client.QueryStatus(ctx)
+	if err != nil {
+		t.Fatalf("1st QueryStatus failed: %v", err)
+	}
+	if st1.FilamentType != "PLA" {
+		t.Errorf("expected gcode fallback filament PLA, got %s", st1.FilamentType)
+	}
+	if st1.FilamentColor != "#1E88E5" {
+		t.Errorf("expected gcode fallback color #1E88E5, got %s", st1.FilamentColor)
+	}
+	if atomic.LoadInt32(&metaCalls) != 1 {
+		t.Errorf("expected 1 metadata call, got %d", metaCalls)
+	}
+
+	// 2nd query (subsequent poll on same print) -> uses cached metadata, does NOT hit /server/files/metadata again
+	st2, err := client.QueryStatus(ctx)
+	if err != nil {
+		t.Fatalf("2nd QueryStatus failed: %v", err)
+	}
+	if st2.FilamentType != "PLA" {
+		t.Errorf("expected cached filament PLA, got %s", st2.FilamentType)
+	}
+	if atomic.LoadInt32(&metaCalls) != 1 {
+		t.Errorf("expected metadata to only be pulled once, but metaCalls = %d", metaCalls)
 	}
 }
 
