@@ -91,11 +91,11 @@ func (c *Coordinator) HandleStatus(ctx context.Context, st moonraker.MoonrakerSt
 		} else if c.isPaused {
 			// Resumed from paused
 			c.isPaused = false
-			c.updateTile(ctx, "Printing", "teal", "printer.fill", progressPct, jobName, st)
+			c.updateTile(ctx, "Printing", getPrintColor(st), "printer.fill", progressPct, jobName, st)
 		} else {
 			// Periodic progress update
 			if time.Since(c.lastUpdate) >= 5*time.Second || progressPct != c.lastProgress {
-				c.updateTile(ctx, "Printing", "teal", "printer.fill", progressPct, jobName, st)
+				c.updateTile(ctx, "Printing", getPrintColor(st), "printer.fill", progressPct, jobName, st)
 			}
 		}
 	} else if currentState == "paused" {
@@ -131,16 +131,20 @@ func (c *Coordinator) HandleStatus(ctx context.Context, st moonraker.MoonrakerSt
 func (c *Coordinator) startPrint(ctx context.Context, jobName string, progressPct int, st moonraker.MoonrakerStatus) {
 	c.startTime = time.Now()
 	c.isPaused = false
-	log.Printf("[Coordinator] Print started: %s (printer: %s)", jobName, c.cfg.PrinterName)
+	log.Printf("[Coordinator] Print started: %s (printer: %s, filament: %s, color: %s)",
+		jobName, c.cfg.PrinterName, st.FilamentType, st.FilamentColor)
 
 	endsIn := calculateEndsIn(st)
+	body := formatJobBody(jobName, st)
+	color := getPrintColor(st)
 
 	tile := notify.TileContent{
 		Title:    c.cfg.PrinterName,
-		Body:     jobName,
+		Body:     body,
 		Status:   "Printing",
 		Symbol:   "printer.fill",
-		Color:    "teal",
+		Color:    color,
+		Tint:     notify.FormatTint(color),
 		Progress: &progressPct,
 		EndsIn:   endsIn,
 	}
@@ -176,13 +180,15 @@ func (c *Coordinator) updateTile(ctx context.Context, status, color, symbol stri
 	}
 
 	endsIn := calculateEndsIn(st)
+	body := formatJobBody(jobName, st)
 
 	tile := notify.TileContent{
 		Title:    c.cfg.PrinterName,
-		Body:     jobName,
+		Body:     body,
 		Status:   status,
 		Symbol:   symbol,
 		Color:    color,
+		Tint:     notify.FormatTint(color),
 		Progress: &progressPct,
 		EndsIn:   endsIn,
 	}
@@ -226,6 +232,7 @@ func (c *Coordinator) completePrint(ctx context.Context, jobName string, st moon
 		Status:   "Done",
 		Symbol:   "checkmark.circle.fill",
 		Color:    "green",
+		Tint:     notify.FormatTint("green"),
 		Progress: &prog,
 	}
 
@@ -258,6 +265,7 @@ func (c *Coordinator) cancelPrint(ctx context.Context, jobName string, st moonra
 		Status:   "Stopped",
 		Symbol:   "xmark.circle.fill",
 		Color:    "gray",
+		Tint:     notify.FormatTint("gray"),
 		Progress: &prog,
 	}
 
@@ -275,6 +283,7 @@ func (c *Coordinator) errorPrint(ctx context.Context, jobName string, st moonrak
 		Status:   "Failed",
 		Symbol:   "exclamationmark.triangle.fill",
 		Color:    "red",
+		Tint:     notify.FormatTint("red"),
 		Progress: &prog,
 	}
 
@@ -362,6 +371,22 @@ func buildMetrics(st moonraker.MoonrakerStatus) []notify.MetricChip {
 		})
 	}
 	return metrics
+}
+
+func formatJobBody(jobName string, st moonraker.MoonrakerStatus) string {
+	if st.FilamentType != "" {
+		return fmt.Sprintf("%s • %s", jobName, st.FilamentType)
+	}
+	return jobName
+}
+
+func getPrintColor(st moonraker.MoonrakerStatus) string {
+	if st.FilamentColor != "" {
+		if tint := notify.FormatTint(st.FilamentColor); tint != "" {
+			return tint
+		}
+	}
+	return "teal"
 }
 
 func formatDuration(sec float64) string {

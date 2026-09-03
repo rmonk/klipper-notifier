@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -52,32 +53,79 @@ func TestMoonrakerCheckConnection(t *testing.T) {
 	}
 }
 
-func TestMoonrakerQueryStatus(t *testing.T) {
+func TestMoonrakerQueryStatusWithAFC(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/printer/objects/query" {
+		if r.URL.Path == "/printer/objects/list" {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"result": map[string]interface{}{
-					"status": map[string]interface{}{
-						"print_stats": map[string]interface{}{
-							"filename":       "voron_cube.gcode",
-							"state":          "printing",
-							"print_duration": 120.0,
-							"total_duration": 150.0,
-						},
-						"display_status": map[string]interface{}{
-							"progress": 0.45,
-							"message":  "Printing layer 10",
-						},
-						"heater_bed": map[string]interface{}{
-							"temperature": 60.2,
-							"target":      60.0,
-						},
-						"extruder": map[string]interface{}{
-							"temperature": 210.5,
-							"target":      210.0,
-						},
-					},
+					"objects": []string{"print_stats", "AFC", "AFC_lane E0", "AFC_lane E2"},
+				},
+			})
+			return
+		}
+		if r.URL.Path == "/printer/objects/query" {
+			requested := r.URL.Query()
+			if !requested.Has("AFC_lane E2") {
+				t.Errorf("expected status query to request active lane AFC_lane E2; query was %q", r.URL.RawQuery)
+			}
+
+			status := map[string]interface{}{
+				"print_stats": map[string]interface{}{
+					"filename":       "voron_cube.gcode",
+					"state":          "printing",
+					"print_duration": 120.0,
+					"total_duration": 150.0,
+				},
+				"display_status": map[string]interface{}{
+					"progress": 0.45,
+					"message":  "Printing layer 10",
+				},
+				"heater_bed": map[string]interface{}{
+					"temperature": 60.2,
+					"target":      60.0,
+				},
+				"extruder": map[string]interface{}{
+					"temperature": 210.5,
+					"target":      210.0,
+				},
+				"toolhead": map[string]interface{}{
+					"extruder": "extruder2",
+				},
+				"AFC": map[string]interface{}{
+					"current_lane": "E2",
+					"lanes":        []string{"E0", "E1", "E2", "E3"},
+				},
+			}
+			lanes := map[string]map[string]interface{}{
+				"AFC_lane E0": {
+					"name":          "E0",
+					"material":      "PLA",
+					"filament_name": "Generic PLA",
+					"color":         "#000000",
+					"extruder":      "extruder",
+					"status":        "empty",
+				},
+				"AFC_lane E2": {
+					"name":          "E2",
+					"material":      "PETG",
+					"filament_name": "Generic PETG",
+					"color":         "#8E24AA",
+					"extruder":      "extruder2",
+					"status":        "Loaded",
+					"tool_loaded":   true,
+				},
+			}
+			for laneName, lane := range lanes {
+				if requested.Has(laneName) {
+					status[laneName] = lane
+				}
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"result": map[string]interface{}{
+					"status": status,
 				},
 			})
 			return
@@ -115,10 +163,204 @@ func TestMoonrakerQueryStatus(t *testing.T) {
 	if st.Progress != 0.45 {
 		t.Errorf("expected progress 0.45, got %f", st.Progress)
 	}
-	if st.ExtruderTemp < 210.0 || st.BedTemp < 60.0 {
-		t.Errorf("unexpected temperatures: extruder=%f bed=%f", st.ExtruderTemp, st.BedTemp)
+	if st.FilamentType != "PETG" {
+		t.Errorf("expected AFC filament type PETG, got %s", st.FilamentType)
 	}
-	if st.TotalLayers != 100 {
-		t.Errorf("expected 100 total layers from metadata, got %d", st.TotalLayers)
+	if st.FilamentColor != "#8E24AA" {
+		t.Errorf("expected AFC filament color #8E24AA, got %s", st.FilamentColor)
+	}
+}
+
+func TestMoonrakerQueryStatusWithoutAFCFallbackAndSinglePull(t *testing.T) {
+	var metaCalls int32
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/printer/objects/query" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"result": map[string]interface{}{
+					"status": map[string]interface{}{
+						"print_stats": map[string]interface{}{
+							"filename":       "benchy_fallback.gcode",
+							"state":          "printing",
+							"print_duration": 60.0,
+							"total_duration": 80.0,
+						},
+						"display_status": map[string]interface{}{
+							"progress": 0.20,
+						},
+						"heater_bed": map[string]interface{}{
+							"temperature": 60.0,
+						},
+						"extruder": map[string]interface{}{
+							"temperature": 215.0,
+						},
+					},
+				},
+			})
+			return
+		}
+		if r.URL.Path == "/server/files/metadata" {
+			atomic.AddInt32(&metaCalls, 1)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"result": map[string]interface{}{
+					"estimated_time":  600.0,
+					"layer_count":     250,
+					"filament_type":   "PLA",
+					"filament_colour": "#1E88E5",
+					"filament_name":   "Polymaker PolyLite PLA",
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	client, err := NewClient(ts.URL, "")
+	if err != nil {
+		t.Fatalf("client init error: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// 1st query -> fetches metadata from gcode
+	st1, err := client.QueryStatus(ctx)
+	if err != nil {
+		t.Fatalf("1st QueryStatus failed: %v", err)
+	}
+	if st1.FilamentType != "PLA" {
+		t.Errorf("expected gcode fallback filament PLA, got %s", st1.FilamentType)
+	}
+	if st1.FilamentColor != "#1E88E5" {
+		t.Errorf("expected gcode fallback color #1E88E5, got %s", st1.FilamentColor)
+	}
+	if atomic.LoadInt32(&metaCalls) != 1 {
+		t.Errorf("expected 1 metadata call, got %d", metaCalls)
+	}
+
+	// 2nd query (subsequent poll on same print) -> uses cached metadata, does NOT hit /server/files/metadata again
+	st2, err := client.QueryStatus(ctx)
+	if err != nil {
+		t.Fatalf("2nd QueryStatus failed: %v", err)
+	}
+	if st2.FilamentType != "PLA" {
+		t.Errorf("expected cached filament PLA, got %s", st2.FilamentType)
+	}
+	if atomic.LoadInt32(&metaCalls) != 1 {
+		t.Errorf("expected metadata to only be pulled once, but metaCalls = %d", metaCalls)
+	}
+}
+
+func TestMoonrakerFilenameChangeResetsFilament(t *testing.T) {
+	client, err := NewClient("http://127.0.0.1:7125", "")
+	if err != nil {
+		t.Fatalf("client init error: %v", err)
+	}
+
+	client.status.Filename = "fileA.gcode"
+	client.status.FilamentType = "PLA"
+	client.status.FilamentColor = "#1E88E5"
+	client.status.FilamentName = "Generic Blue PLA"
+
+	// New filename arrived in print_stats
+	rawStats := map[string]json.RawMessage{
+		"print_stats": json.RawMessage(`{"filename":"fileB.gcode","state":"printing"}`),
+	}
+	client.updateFromRawStatus(rawStats)
+
+	if client.status.Filename != "fileB.gcode" {
+		t.Errorf("expected filename fileB.gcode, got %s", client.status.Filename)
+	}
+	if client.status.FilamentType != "" || client.status.FilamentColor != "" {
+		t.Errorf("expected filament reset on new filename, got type=%q color=%q", client.status.FilamentType, client.status.FilamentColor)
+	}
+}
+
+func TestGCodeMetadataFilamentParsing(t *testing.T) {
+	meta := &GCodeMetadata{
+		FilamentType:   "PLA;TPU;PETG;PETG",
+		FilamentName:   `Generic PLA @System";"Generic TPU @System";"Bambu PETG HF @System";"Bambu PETG HF @System`,
+		FilamentColour: "#080A0D;#000000;#1E88E5;#8E24AA",
+		FilamentWeight: []interface{}{0.0, 0.0, 14.13, 0.0},
+	}
+
+	fType, fColor, fName := meta.GetFilamentInfo()
+	if fType != "PETG" {
+		t.Errorf("expected primary filament PETG, got %s", fType)
+	}
+	if fColor != "#1E88E5" {
+		t.Errorf("expected primary color #1E88E5, got %s", fColor)
+	}
+	if fName != "Bambu PETG HF @System" {
+		t.Errorf("expected Bambu PETG HF @System, got %s", fName)
+	}
+}
+
+func TestGCodeMetadataFilamentParsingWithEmptySlots(t *testing.T) {
+	meta := &GCodeMetadata{
+		FilamentType:   ";;PETG;PLA",
+		FilamentColour: ";;#8E24AA;#1E88E5",
+		FilamentWeight: ";;25.5;5.0",
+	}
+
+	fType, fColor, _ := meta.GetFilamentInfo()
+	if fType != "PETG + PLA" {
+		t.Errorf("expected 'PETG + PLA', got %s", fType)
+	}
+	if fColor != "#8E24AA" {
+		t.Errorf("expected primary color #8E24AA (highest weight), got %s", fColor)
+	}
+}
+
+func TestAFCLanePartialUpdatePreservesFields(t *testing.T) {
+	client, err := NewClient("http://127.0.0.1:7125", "")
+	if err != nil {
+		t.Fatalf("client init error: %v", err)
+	}
+
+	// 1. Initial full snapshot
+	fullSnapshot := map[string]json.RawMessage{
+		"AFC": json.RawMessage(`{"current_lane":"E1","lanes":["E0","E1"]}`),
+		"AFC_lane E1": json.RawMessage(`{
+			"name": "E1",
+			"material": "PETG",
+			"filament_name": "Generic PETG",
+			"color": "#8E24AA",
+			"extruder": "extruder",
+			"status": "Loaded"
+		}`),
+	}
+	client.updateFromRawStatus(fullSnapshot)
+
+	if client.status.FilamentType != "PETG" || client.status.FilamentColor != "#8E24AA" {
+		t.Fatalf("expected initial PETG #8E24AA, got type=%q color=%q", client.status.FilamentType, client.status.FilamentColor)
+	}
+
+	// 2. Partial WebSocket update sending only status change
+	partialUpdate := map[string]json.RawMessage{
+		"AFC_lane E1": json.RawMessage(`{"status":"Tooled"}`),
+	}
+	client.updateFromRawStatus(partialUpdate)
+
+	lane := client.afcLanes["AFC_lane E1"]
+	if lane == nil {
+		t.Fatal("expected AFC_lane E1 to exist in afcLanes")
+	}
+	if lane.Status != "Tooled" {
+		t.Errorf("expected status Tooled, got %s", lane.Status)
+	}
+	if lane.Material != "PETG" {
+		t.Errorf("expected material PETG preserved, got %s", lane.Material)
+	}
+	if lane.Color != "#8E24AA" {
+		t.Errorf("expected color #8E24AA preserved, got %s", lane.Color)
+	}
+	if lane.Extruder != "extruder" {
+		t.Errorf("expected extruder preserved, got %s", lane.Extruder)
+	}
+	if client.status.FilamentType != "PETG" {
+		t.Errorf("expected status filament type PETG preserved, got %s", client.status.FilamentType)
 	}
 }
