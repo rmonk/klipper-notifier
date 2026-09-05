@@ -3,6 +3,7 @@ package notify
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,6 +41,40 @@ type TileContent struct {
 	Buttons  []TileButton `json:"buttons,omitempty"`
 }
 
+// adjustContrast computes the perceived luminance of a hex color and remaps
+// extreme darks (black) and extreme lights (white) to accessible contrast-friendly shades
+// that stay legible across both Dark and Light iOS Live Activity themes.
+func adjustContrast(hexStr string) string {
+	clean := strings.TrimPrefix(hexStr, "#")
+	if len(clean) < 6 {
+		return "#" + clean
+	}
+
+	r, err1 := strconv.ParseUint(clean[0:2], 16, 8)
+	g, err2 := strconv.ParseUint(clean[2:4], 16, 8)
+	b, err3 := strconv.ParseUint(clean[4:6], 16, 8)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return "#" + clean[:6]
+	}
+
+	// Standard perceived luminance formula (ITU-R BT.601)
+	lum := 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)
+
+	// Black and near-black (Y < 50): remap to Apple systemGray (#8E8E93)
+	// Prevents invisible 0:1 contrast against black Dynamic Island and dark frosted glass.
+	if lum < 50 {
+		return "#8E8E93"
+	}
+
+	// White and near-white (Y > 230): remap to Apple systemGray4 (#D1D1D6)
+	// Prevents washing out on light Lock Screen backgrounds while staying crisp on dark widgets.
+	if lum > 230 {
+		return "#D1D1D6"
+	}
+
+	return "#" + clean[:6]
+}
+
 // FormatTint normalizes a color name or hex code into a valid #RRGGBB tint hex string for Notify!
 // Returns fallback "#00A76F" (teal) if the color is unparseable.
 func FormatTint(c string) string {
@@ -48,6 +83,10 @@ func FormatTint(c string) string {
 		return ""
 	}
 	switch strings.ToLower(c) {
+	case "black":
+		return "#8E8E93" // Charcoal / Slate for readability on black Dynamic Island
+	case "white":
+		return "#D1D1D6" // Silver / Platinum for readability on light backgrounds
 	case "teal":
 		return "#00A76F"
 	case "green":
@@ -70,10 +109,7 @@ func FormatTint(c string) string {
 		return "#8E8E93"
 	}
 	if hexColorRegex.MatchString(c) {
-		if !strings.HasPrefix(c, "#") {
-			return "#" + c
-		}
-		return c
+		return adjustContrast(c)
 	}
 	return "#00A76F"
 }

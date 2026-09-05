@@ -48,6 +48,8 @@ var sampleFilaments = []testFilament{
 	{material: "PLA-CF", color: "#D81B60", name: "Generic Pink PLA-CF"},
 	{material: "PETG", color: "#00ACC1", name: "Generic Teal PETG"},
 	{material: "PLA", color: "#FDD835", name: "Generic Yellow PLA"},
+	{material: "PLA", color: "#000000", name: "Generic Black PLA"},
+	{material: "PETG", color: "#FFFFFF", name: "Generic White PETG"},
 }
 
 func pickNextFilament(r *rand.Rand, prevIdx int) (testFilament, int) {
