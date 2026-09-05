@@ -63,19 +63,19 @@ func adjustContrast(hexStr string) string {
 	// Black and near-black (Y < 50): remap to Apple systemGray (#8E8E93)
 	// Prevents invisible 0:1 contrast against black Dynamic Island and dark frosted glass.
 	if lum < 50 {
-		return "#8E8E93"
+		return "#8E8E93" + clean[6:]
 	}
 
 	// White and near-white (Y > 230): remap to Apple systemGray4 (#D1D1D6)
 	// Prevents washing out on light Lock Screen backgrounds while staying crisp on dark widgets.
 	if lum > 230 {
-		return "#D1D1D6"
+		return "#D1D1D6" + clean[6:]
 	}
 
-	return "#" + clean[:6]
+	return "#" + clean
 }
 
-// FormatTint normalizes a color name or hex code into a valid #RRGGBB tint hex string for Notify!
+// FormatTint normalizes a color name or hex code into a valid #RRGGBB or #RRGGBBAA tint hex string for Notify!
 // Returns fallback "#00A76F" (teal) if the color is unparseable.
 func FormatTint(c string) string {
 	c = strings.TrimSpace(c)
