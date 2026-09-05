@@ -23,6 +23,21 @@ func TestFormatTint(t *testing.T) {
 		{"#8E24AA", "#8E24AA"},
 		{"8E24AA", "#8E24AA"},
 		{"#1E88E5", "#1E88E5"},
+		{"#1E88E580", "#1E88E580"},
+		// Black & near-black contrast remapping
+		{"black", "#8E8E93"},
+		{"#000000", "#8E8E93"},
+		{"#00000080", "#8E8E9380"},
+		{"000000", "#8E8E93"},
+		{"#080A0D", "#8E8E93"},
+		{"#1A1A1A", "#8E8E93"},
+		// White & near-white contrast remapping
+		{"white", "#D1D1D6"},
+		{"#FFFFFF", "#D1D1D6"},
+		{"#FFFFFF80", "#D1D1D680"},
+		{"FFFFFF", "#D1D1D6"},
+		{"#FAFAFA", "#D1D1D6"},
+		{"#F0F0F0", "#D1D1D6"},
 		{"", ""},
 	}
 
